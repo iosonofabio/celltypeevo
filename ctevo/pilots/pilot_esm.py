@@ -46,6 +46,8 @@ def get_avg_expression(species):
         for tissue in me['by_tissue']:
             gr = me['by_tissue'][tissue]['celltype']
             celltypesi = gr['index'].asstr()[:]
+            if tissue == 'bladder':
+                print(species, tissue, celltypesi)
             avgi = gr['fraction'][:, :]
             data['celltype'].append(celltypesi)
             data['organ'].append([tissue] * len(celltypesi))
@@ -78,10 +80,11 @@ def get_celltype_embedding(organism):
     #FIXME
     # modify the avg with a better proxy
     # 1. blackout non-markers
-    nmarkers = 30
+    nmarkers = 10
     avg2 = avg.copy()
     for (ct, organ, _) in avg.coords['dim_1'].values:
-        diff = (avg.sel(celltype=ct) - avg.loc[:, avg.coords['celltype'] != ct].mean(axis=1)).isel(dim_1=0)
+        idx = (avg.coords['celltype'] != ct) & (avg.coords['organ'] == organ)
+        diff = (avg.sel(celltype=ct) - avg.loc[:, idx].mean(axis=1)).isel(dim_1=0)
         avg2.loc[diff.sortby(diff, ascending=False)[nmarkers:].dim_0, ct] = 0
     avg = avg2
 
@@ -103,10 +106,7 @@ if __name__ == '__main__':
     print('Get cell type embeddings')
     cembs = []
     for organism in species:
-        try:
-            res = get_celltype_embedding(organism)
-        except ValueError:
-            continue
+        res = get_celltype_embedding(organism)
         cembs.append(res)
     cemb = xr.concat(cembs, 'dim_0')
     t1 = time.time()
@@ -129,7 +129,15 @@ if __name__ == '__main__':
     colors = sns.color_palette('husl', n_colors=gby.ngroups)
     for i, (species, datum) in enumerate(gby):
         color = colors[i]
-        marker = 's' if species in ('h_sapiens', 'm_musculus', 'm_murinus', 'd_rerio', 'x_laevis') else 'o'
+        if species in ('h_sapiens', 'm_murinus', 'd_rerio', 'x_laevis'):
+            marker = 's'
+        elif species in ('m_musculus',):
+            marker = 'd'
+        elif species in ('l_minuta',):
+            marker = 'v'
+        else:
+            marker = 'o'
+        
         ax.scatter(datum['umap1'], datum['umap2'], color=color, alpha=0.7, label=species, marker=marker)
     ax.legend(loc='upper left', bbox_transform=ax.transAxes, bbox_to_anchor=[1, 1], title='Organism:')
     ax.set_xlabel('UMAP1')
@@ -138,4 +146,4 @@ if __name__ == '__main__':
     ax.set_yticks([])
     fig.tight_layout()
     plt.ion(); plt.show()
-    fig.savefig('umap_cell_types_30_markers_esm2_18species.svg')
+    #fig.savefig('../figures/umap_cell_types_30_markers_esm2_18species.svg')
