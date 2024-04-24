@@ -14,7 +14,14 @@ import hdf5plugin
 import numpy as np
 import pandas as pd
 import xarray as xr
-import parasail
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
+try:
+    import parasail
+except ImportError:
+    parasail = None
 
 
 fn_embedding = '../data/prost/prost_embeddings.h5'
@@ -263,11 +270,11 @@ if __name__ == '__main__':
             dis = one_to_all_distance(femb, 'rbp4l.S', 'x_laevis', 'm_musculus')
             dish = one_to_all_distance(femb, 'RBP4', 'h_sapiens', 'm_musculus')
 
-        if True:
+        if False:
             # Try to cluster genes into "macrogenes" a la SATURN
             from sklearn.cluster import HDBSCAN
 
-            nrows = [10, 30, 100, 300]:#, 1000, 3000, 10000]
+            nrows = [10, 30, 100, 300] #, 1000, 3000, 10000]
             times = []
             for nrow in nrows:
                 X = femb.values[:nrow]
@@ -282,9 +289,130 @@ if __name__ == '__main__':
                 times.append(dt)
                 print(nrow, 'sequences', dt, 'seconds')
 
-            fig, ax = plt.subplots()
-            ax.plot(nrows, times)
-            ax.set_xlabel('# sequences')
-            ax.set_ylabel('runtime clustering [s]')
-            fig.tight_layout()
-            plt.ion(); plt.show()
+            if plt is not None:
+                fig, ax = plt.subplots()
+                ax.plot(nrows, times)
+                ax.set_xlabel('# sequences')
+                ax.set_ylabel('runtime clustering [s]')
+                fig.tight_layout()
+                plt.ion(); plt.show()
+
+
+        if True:
+            # Try to cluster genes into "macrogenes" a la SATURN, using GPU-knn + leiden
+            import time
+            import torch
+            from pykeops.torch import LazyTensor
+            
+            use_cuda = torch.cuda.is_available()
+
+            nrow = 100
+
+            def compute_knn(femb, nrow=None, K=3, return_index=False):
+                if nrow is None:
+                    nrow = len(femb)
+                x = torch.tensor(femb.values[:nrow].astype('float32'), device='cuda' if use_cuda else 'cpu')
+
+                # N.B.: K has very little impact on the running time
+                start = time.time()  # Benchmark:
+                # Dimension-expanded self
+                X_i = LazyTensor(x[:, None, :])
+                # Dimension-expanded self, along a different axis
+                X_j = LazyTensor(x[None, :, :])
+                # Compute matrix of L1 distances
+                # Notice the sum is, of course, along the non-expanded axis
+                D_ij = ((X_i - X_j).abs()).sum(-1)
+                
+                ind_knn = D_ij.argKmin(K, dim=1)  # Samples <-> Dataset, (N_test, K)
+                ind_knn_cpu = ind_knn.cpu()
+                
+                if use_cuda:
+                    torch.cuda.synchronize()
+                end = time.time()
+                if not return_index:
+                    return (end - start)
+                return ind_knn, (end - start)
+
+            if False:
+                # Benchmarking runtimes, around 10 seconds for 100k sequences with a log10/log10 slope of 1.83
+                nrows = [10, 30, 100, 300, 600, 1000, 3000, 6000, 10000, 30000, 100000]#, len(femb)]
+                times = []
+                for nrow in nrows:
+                    print(nrow, 'sequences')
+                    dt = compute_knn(femb, nrow)
+                    print(dt)
+                    times.append(dt)
+
+                import plotext as plt
+                plt.scatter(np.log10(nrows), np.log10(times))
+                plt.title('Runtime for neighbors (CUDA)')
+                plt.xlabel('Number of sequences (log10)')
+                plt.ylabel('Runtime (log10) [s]')
+                plt.show()            
+
+            if False:
+                def one_to_all_distance(femb, gene, species1, species2):
+                    fgene = femb.loc[femb.species == species1].loc[gene].values
+                    f2 = femb.loc[femb.species == species2]
+                    homo_organism = (np.abs(f2 - fgene)).sum(axis=1).to_series()
+                    return homo_organism
+
+                j = 1
+                ind1 = ind_knn_cpu[i, 0]
+                ind2 = ind_knn_cpu[i, j]
+                gene1, gene2 = femb.feature.values[[ind1, ind2]]
+                species1, species2 = femb.species.values[[ind1, ind2]]
+                dis = one_to_all_distance(femb, gene1, species1, species2)
+
+            if False:
+                K = 10
+                print(f'Computing top {K} neighbors for each sequence in vertebrates')
+                # Vertebrates, around 95k sequences
+                femb_vert = femb[femb.species.isin(['h_sapiens', 'm_musculus', 'm_murinus', 'd_rerio', 'x_laevis'])]
+                ind_knn, dt = compute_knn(femb_vert, K=K, return_index=True)
+                ind_knn_cpu = ind_knn.cpu()
+
+                from scipy.spatial.distance import pdist, squareform
+                def self_dist(fembi):
+                    d = squareform(pdist(fembi.values))
+                    return d
+
+
+            def compute_target_species_equivalents(femb, fembi, target_species='h_sapiens', K=3):
+                femb_target = femb[femb.species == target_species]
+                x_query = torch.tensor(fembi.values.astype('float32'), device='cuda' if use_cuda else 'cpu')
+                x_target = torch.tensor(femb_target.values.astype('float32'), device='cuda' if use_cuda else 'cpu')
+
+                ind_res = - np.ones((len(fembi), K), int)
+                X_j = LazyTensor(x_target, axis=1)
+                for i in range(len(fembi)):
+                    X_i = LazyTensor(x_query[i])
+                    # Compute matrix of L1 distances
+                    D_ij = ((X_i - X_j).abs()).sum(-1)
+                    # Find nearest neighbor in target species 
+                    ind_knn = D_ij.argKmin(K, dim=1).cpu()
+                    ind_res[i] = np.asarray(ind_knn)
+                
+                    if use_cuda:
+                        torch.cuda.synchronize()
+
+                res = []
+                for i in range(len(fembi)):
+                    for j in range(K):
+                        idx = ind_res[i, j]
+                        tgt = femb_target[idx]
+                        resi = {
+                            'query_feature': fembi.feature.values[i],
+                            'target_feature': tgt.feature.values,
+                            'K': j + 1,
+                            'distance': np.abs((fembi[i].values - tgt.values)).sum(axis=-1),
+                        }
+                        res.append(resi)
+                res = pd.DataFrame(res)
+
+                return res
+
+            fembi = femb.loc[femb.feature.isin(['Ms4a1', 'Cd19', 'Cd2']) & (femb.species == 'm_musculus')]
+            res = compute_target_species_equivalents(femb, fembi)
+
+
