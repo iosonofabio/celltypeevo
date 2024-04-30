@@ -28,6 +28,8 @@ def get_data_folder(compressed=True):
     import platform
     if platform.node() == 'archacp1':
         return pathlib.Path('/home/fabio/projects/compressed_atlas/prototype2/cell_atlas_approximations_compression/data/atlas_approximations/')
+    elif platform.node() == 'archfabilab1':
+        return pathlib.Path('/home/fabio/projects/celltypeevo/data/atlas_approximations/')
     if compressed:
         return pathlib.Path('/home/fabio/university/PI/projects/compressed_atlas/prototype2/cell_atlas_approximations_API/web/static/atlas_data/')
     else:
