@@ -199,7 +199,7 @@ if __name__ == '__main__':
                 row = res.obs.iloc[0]
                 target = (adata_target.uns['species'], row['tissue'], row['celltype'])
                 score = row['cross-species score']
-                return (query, target, score)
+                return (query, target, score, markers_eq_table)
 
             if False:
                 print('Get target atlas')
@@ -232,11 +232,54 @@ if __name__ == '__main__':
                     adata_target = adatas[(j + 1) % 2]
                     for i, (_, row) in enumerate(adata_query.obs[['tissue', 'celltype']].iterrows()):
                         print(f'j: {j}, i: {i} / {len(adata_query)}')
-                        query, target, score = find_sister_celltype(
+                        query, target, score, markers_eq_table = find_sister_celltype(
                             adata_query, adata_target, row['tissue'], row['celltype'],
                         )
                         bigraph.append({
                             'source': query,
                             'target': target,
                             'score': score,
+                            'markers': markers_eq_table,
                         })
+
+                if plt is not None:
+                    fig, ax = plt.subplots(figsize=(15, 8))
+                    nodes1 = [(adata1.uns['species'], row['tissue'], row['celltype']) for _, row in adata1.obs.iterrows()]
+                    nodes2 = [(adata2.uns['species'], row['tissue'], row['celltype']) for _, row in adata2.obs.iterrows()]
+                    if len(nodes1) > len(nodes2):
+                        xnodes1 = np.arange(len(nodes1))
+                        xnodes2 = np.linspace(xnodes1[0], xnodes1[-1], len(nodes2))
+                    else:
+                        xnodes2 = np.arange(len(nodes2))
+                        xnodes1 = np.linspace(xnodes2[0], xnodes2[-1], len(nodes1))
+                    # Plot the nodes
+                    ax.scatter(xnodes1, [0] * len(nodes1), fc='none', ec='k', lw=2)
+                    ax.scatter(xnodes2, [1] * len(nodes2), fc='none', ec='k', lw=2)
+                    for node, x in zip(nodes1, xnodes1):
+                        text = ', '.join(node[1:])
+                        ax.text(x, -0.1, text, rotation=90, va='top', ha='center')
+                    for node, x in zip(nodes2, xnodes2):
+                        text = ', '.join(node[1:])
+                        ax.text(x, 1.1, text, rotation=90, va='bottom', ha='center')
+                    # Plot the edges
+                    scoremax = max(bigraph, key=lambda x: x['score'])['score']
+                    def thickness_func(score):
+                        return 3.0 * score / scoremax
+                    for edge in bigraph:
+                        if edge['source'][0] == adata1.uns['species']:
+                            x1 = xnodes1[nodes1.index(edge['source'])] - 0.01
+                            x2 = xnodes2[nodes2.index(edge['target'])] - 0.01
+                            y1 = 0
+                            y2 = 1
+                            color = 'steelblue'
+                        else:
+                            x1 = xnodes2[nodes2.index(edge['source'])] + 0.01
+                            x2 = xnodes1[nodes1.index(edge['target'])] + 0.01
+                            y1 = 1
+                            y2 = 0
+                            color = 'darkred'
+                        lw = thickness_func(edge['score'])
+                        ax.plot([x1, x2], [y1, y2], lw=lw, color=color)
+                    fig.tight_layout()
+                    plt.ion()
+                    plt.show()
