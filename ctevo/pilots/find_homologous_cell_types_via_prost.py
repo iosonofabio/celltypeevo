@@ -180,16 +180,61 @@ if __name__ == '__main__':
                 order = np.argsort(scores)[::-1]
                 return adataf[order]
 
-            print('Get target atlas')
-            target_species = 'h_sapiens'
-            adata_target = get_atlas(target_species)
-            query = ('m_musculus', 'lung', 'fibroblast')
-            adata_query = get_atlas(query[0])
-            markers = get_markers(adata_query, query[1], query[2])
-            fembi = femb.loc[femb.feature.isin(markers) & (femb.species == query[0])]
-            markers_eq_table = compute_target_species_equivalents(femb, fembi, K=1)
+            def find_sister_celltype(adata_query, adata_target, tissue_query, celltype_query):
+                query = (adata_query.uns['species'], tissue_query, celltype_query)
+                markers = get_markers(adata_query, query[1], query[2])
+                fembi = femb.loc[femb.feature.isin(markers) & (femb.species == query[0])]
+                markers_eq_table = compute_target_species_equivalents(
+                    femb,
+                    fembi,
+                    target_species=adata_target.uns['species'],
+                    K=1,
+                )
+                res = score_celltypes(
+                    adata_target,
+                    markers_eq_table['target_feature'].values,
+                )
+                row = res.obs.iloc[0]
+                target = (adata_target.uns['species'], row['tissue'], row['celltype'])
+                score = row['cross-species score']
+                return (query, target, score)
 
-            res = score_celltypes(
-                adata_target,
-                markers_eq_table['target_feature'].values,
-            )
+            if False:
+                print('Get target atlas')
+                target_species = 'h_sapiens'
+                adata_target = get_atlas(target_species)
+                query = ('m_musculus', 'lung', 'fibroblast')
+                adata_query = get_atlas(query[0])
+
+                markers = get_markers(adata_query, query[1], query[2])
+                fembi = femb.loc[femb.feature.isin(markers) & (femb.species == query[0])]
+                markers_eq_table = compute_target_species_equivalents(femb, fembi, K=1)
+
+                res = score_celltypes(
+                    adata_target,
+                    markers_eq_table['target_feature'].values,
+                )
+
+            if True:
+                print('Bipartite graph between two species')
+                species1 = 'h_sapiens'
+                species2 = 'm_musculus'
+                adata1 = get_atlas(species1)
+                adata1.uns['species'] = species1
+                adata2 = get_atlas(species2)
+                adata2.uns['species'] = species2
+                adatas = [adata1, adata2]
+                bigraph = []
+                for j in range(2):
+                    adata_query = adatas[j]
+                    adata_target = adatas[(j + 1) % 2]
+                    for i, (_, row) in enumerate(adata_query.obs[['tissue', 'celltype']].iterrows()):
+                        print(f'j: {j}, i: {i} / {len(adata_query)}')
+                        query, target, score = find_sister_celltype(
+                            adata_query, adata_target, row['tissue'], row['celltype'],
+                        )
+                        bigraph.append({
+                            'source': query,
+                            'target': target,
+                            'score': score,
+                        })
